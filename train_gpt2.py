@@ -107,7 +107,10 @@ class GPT(nn.Module):
         # forward the final layernorm and the classifier
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x) # (B, T, vocab_size)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -159,46 +162,76 @@ class GPT(nn.Module):
         return model
 
 # -----------------------------------------------------------------------------
-num_return_seq = 5
-max_length = 30
+device = "cpu"
 
-model = GPT.from_pretrained('gpt2')
-model.eval()
-model.to('cuda')
+# num_return_seq = 5
+# max_length = 30
+# enc = tiktoken.get_encoding("gpt2")
 
-# prefix tokens
+
+
+
+# get a data batch
 import tiktoken
 enc = tiktoken.get_encoding("gpt2")
-tokens = enc.encode("hello, I'm a langauge model,")
-tokens = torch.tensor(tokens, dtype=torch.long)
-tokens = tokens.unsqueeze(0).repeat(num_return_seq, 1,)
-x = tokens.to('cuda')
+with open('text.txt', 'r') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B*T +1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
 
-# generate
-# seed is 42
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-while x.size(1) < max_length:
-    # forward model to get logits
-    with torch.no_grad():
-        logits = model(x)
-        # take logits at last position
-        logits = logits[:, -1, :]
-        logits = logits - logits.max(dim=-1, keepdim=True).values  # stabilize
-        # get probabilities
-        probs = F.softmax(logits, dim=-1)
-        # do sampling
-        # top k_probs here becomes 5, 50
-        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
-        # select a token from topk probabilities
-        ix = torch.multinomial(topk_probs, 1)
-        # gather corresponding indices
-        xcol = torch.gather(topk_indices, -1, ix)
-        # append the seq
-        x = torch.cat((x, xcol), dim=1)
+# get logits 
+model = GPT(GPTConfig())
+model.to(device)
 
-# print the generated text
-for i in range(num_return_seq):
-    tokens = x[i, :max_length].tolist()
-    decoded = enc.decode(tokens)
-    print(">", decoded)
+# optimizer
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for i in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"step {i}, loss: {loss.item()}")
+
+
+import sys; sys.exit(0)
+
+# # prefix tokens
+# import tiktoken
+# enc = tiktoken.get_encoding("gpt2")
+# tokens = enc.encode("hello, I'm a langauge model,")
+# tokens = torch.tensor(tokens, dtype=torch.long)
+# tokens = tokens.unsqueeze(0).repeat(num_return_seq, 1,)
+# x = tokens.to(device)
+
+# # generate
+# # seed is 42
+# torch.manual_seed(42)
+# torch.cuda.manual_seed(42)
+# while x.size(1) < max_length:
+#     # forward model to get logits
+#     with torch.no_grad():
+#         logits = model(x)
+#         # take logits at last position
+#         logits = logits[:, -1, :]
+#         logits = logits - logits.max(dim=-1, keepdim=True).values  # stabilize
+#         # get probabilities
+#         probs = F.softmax(logits, dim=-1)
+#         # do sampling
+#         # top k_probs here becomes 5, 50
+#         topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+#         # select a token from topk probabilities
+#         ix = torch.multinomial(topk_probs, 1)
+#         # gather corresponding indices
+#         xcol = torch.gather(topk_indices, -1, ix)
+#         # append the seq
+#         x = torch.cat((x, xcol), dim=1)
+
+# # print the generated text
+# for i in range(num_return_seq):
+#     tokens = x[i, :max_length].tolist()
+#     decoded = enc.decode(tokens)
+#     print(">", decoded)
