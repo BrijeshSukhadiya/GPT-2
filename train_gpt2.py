@@ -33,9 +33,9 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         # attention
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-2)))
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att, dim=1)
+        att = F.softmax(att, dim=-1)
         y = att @ v
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         # output projection
@@ -91,6 +91,23 @@ class GPT(nn.Module):
             ln_f = nn.LayerNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+    
+    def forward(self, idx, targets=None):
+        # idx is of shape (B, T)
+        B, T = idx.size()
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        # forward the token and posisition embeddings
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
+        x = tok_emb + pos_emb
+        # forward the blocks of the transformer
+        for block in self.transformer.h:
+            x = block(x)
+        # forward the final layernorm and the classifier
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x) # (B, T, vocab_size)
+        return logits
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -142,5 +159,46 @@ class GPT(nn.Module):
         return model
 
 # -----------------------------------------------------------------------------
+num_return_seq = 5
+max_length = 30
+
 model = GPT.from_pretrained('gpt2')
-print('YAY')
+model.eval()
+model.to('cuda')
+
+# prefix tokens
+import tiktoken
+enc = tiktoken.get_encoding("gpt2")
+tokens = enc.encode("hello, I'm a langauge model,")
+tokens = torch.tensor(tokens, dtype=torch.long)
+tokens = tokens.unsqueeze(0).repeat(num_return_seq, 1,)
+x = tokens.to('cuda')
+
+# generate
+# seed is 42
+torch.manual_seed(42)
+torch.cuda.manual_seed(42)
+while x.size(1) < max_length:
+    # forward model to get logits
+    with torch.no_grad():
+        logits = model(x)
+        # take logits at last position
+        logits = logits[:, -1, :]
+        logits = logits - logits.max(dim=-1, keepdim=True).values  # stabilize
+        # get probabilities
+        probs = F.softmax(logits, dim=-1)
+        # do sampling
+        # top k_probs here becomes 5, 50
+        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+        # select a token from topk probabilities
+        ix = torch.multinomial(topk_probs, 1)
+        # gather corresponding indices
+        xcol = torch.gather(topk_indices, -1, ix)
+        # append the seq
+        x = torch.cat((x, xcol), dim=1)
+
+# print the generated text
+for i in range(num_return_seq):
+    tokens = x[i, :max_length].tolist()
+    decoded = enc.decode(tokens)
+    print(">", decoded)
