@@ -299,6 +299,7 @@ model.to(device)
 # model = torch.compile(model) ## NOT AVAILABLE ON WINDOWS
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
+raw_model = model.module if ddp else model # always contains the "raw" unwrapped model
 
 
 max_lr = 3e-4
@@ -320,7 +321,7 @@ def get_lr(it):
 
 import time
 # optimizer
-optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device_type=device)
+optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device_type=device)
 
 for step in range(max_steps):
     t0 = time.time()
