@@ -309,7 +309,7 @@ for step in range(max_steps):
     dt = (t1 - t0)*1000
     tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
     tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
-    print(f"step {step:4d}, loss: {loss.item()} | lr {lr:.4e} | norm: {norm:.4f}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
+    print(f"step {step:4d}, loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
 
 
 import sys; sys.exit(0)
